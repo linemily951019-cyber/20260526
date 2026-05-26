@@ -4,6 +4,7 @@ let isUpdating = false; // 用來標記是否正在背景更新
 let errorMsg = "";
 let myMap;
 let canvas;
+let hoveredStationData = null; // 紀錄目前被滑鼠懸停的測站 (跨 frame 狀態)
 const mappa = new Mappa('Leaflet');
 
 function setup() {
@@ -169,6 +170,15 @@ function draw() {
         ellipse(pos.x, pos.y, pulseRadius, pulseRadius);
       }
       
+      // 如果是目前被選中(懸停)的測站，產生特別的亮黃色閃爍效果
+      if (hoveredStationData === d) {
+        let pulseRadius = markerSize + (frameCount % 40) * 0.5;
+        let pulseAlpha = map(pulseRadius, markerSize, markerSize + 20, 200, 0);
+        noStroke();
+        fill(255, 255, 0, pulseAlpha); // 亮黃色
+        ellipse(pos.x, pos.y, pulseRadius, pulseRadius);
+      }
+
       // 在地圖上繪製測站定位點
       stroke(100); // 因為 0mm 是米白色，將邊框改為深灰色使其在地圖上更清楚
       strokeWeight(1.5);
@@ -179,13 +189,20 @@ function draw() {
       // 偵測滑鼠是否懸停於圓點上。
       // 將感應半徑從 markerSize / 2 擴大為 markerSize，讓滑鼠不需要精準對齊也能瞬間觸發，大幅提升靈敏度！
       if (dist(mouseX, mouseY, pos.x, pos.y) < markerSize) {
-        hoveredStation = { data: d, pos: pos };
+        currentHoveredData = d;
+        tooltipInfo = { data: d, pos: pos };
       }
     }
   }
   
   // 繪製左下角圖例
   drawLegend();
+
+  // 繪製右側雨量統計表，並更新 hover 狀態
+  currentHoveredData = drawRainfallTable(currentHoveredData);
+
+  // 儲存當前 frame 的 hover 狀態，供下一個 frame 畫圖使用
+  hoveredStationData = currentHoveredData;
 
   // 顯示標題 (移至點位繪製之後，確保位於上方圖層)
   fill(50, 55, 65, 200);
@@ -230,12 +247,10 @@ function draw() {
   drawingContext.shadowBlur = 0;
   noStroke();
 
-  // 如果有測站被滑鼠懸停，在最上層繪製提示資訊框
-  if (hoveredStation) {
-    cursor(HAND); // 將游標切換為「手指」形狀
-
-    let d = hoveredStation.data;
-    let pos = hoveredStation.pos;
+  // 如果有測站被滑鼠從地圖上懸停，在最上層繪製提示資訊框
+  if (tooltipInfo) {
+    let d = tooltipInfo.data;
+    let pos = tooltipInfo.pos;
     
     rectMode(CENTER);
     fill(40, 45, 55, 240); // 資訊框背景
@@ -256,6 +271,11 @@ function draw() {
       textSize(14);
       text(`無降雨 (0 mm)`, pos.x, pos.y - 33);
     }
+  }
+
+  // 根據是否有元素被懸停 (地圖點位或統計表)，來切換滑鼠游標
+  if (hoveredStationData) {
+    cursor(HAND); // 將游標切換為「手指」形狀
   } else {
     cursor(ARROW); // 恢復預設的「箭頭」游標形狀
   }
@@ -320,4 +340,97 @@ function drawLegend() {
   
   // 恢復預設對齊，以免影響後續其他的文字繪製
   textAlign(CENTER, CENTER);
+}
+
+// 繪製右側雨量統計表
+function drawRainfallTable(hoverData) {
+  if (yilanData.length === 0) return hoverData;
+
+  let boxWidth = 260;
+  let padding = 20;
+  let startX = width - boxWidth - padding;
+  let startY = padding;
+  
+  // 計算總雨量與平均雨量
+  let totalRain = 0;
+  for (let d of yilanData) {
+    totalRain += d.rain;
+  }
+  let avgRain = (totalRain / yilanData.length).toFixed(1);
+  
+  // 動態計算列高，確保能適應螢幕高度
+  let titleSpace = 40;
+  let avgSpace = 40;
+  let maxTableHeight = height - padding * 2;
+  let rowHeight = min(24, (maxTableHeight - titleSpace - avgSpace) / yilanData.length);
+  let boxHeight = titleSpace + avgSpace + rowHeight * yilanData.length;
+  
+  // 畫背景框
+  rectMode(CORNER);
+  fill(50, 55, 65, 200); // 半透明深色背景
+  noStroke();
+  rect(startX, startY, boxWidth, boxHeight, 8); // 圓角 8
+  
+  // 標題
+  fill(255);
+  textAlign(CENTER, CENTER);
+  textSize(16);
+  text("各測站雨量統計表", startX + boxWidth / 2, startY + 20);
+  
+  // 列表
+  let listStartY = startY + titleSpace + rowHeight / 2;
+  textSize(max(10, rowHeight * 0.65)); // 根據列高調整字體大小，最小限制為 10
+  
+  for (let i = 0; i < yilanData.length; i++) {
+    let d = yilanData[i];
+    let y = listStartY + i * rowHeight;
+    
+    // 偵測滑鼠是否懸停在此列
+    if (mouseX >= startX && mouseX <= startX + boxWidth &&
+        mouseY >= y - rowHeight / 2 && mouseY < y + rowHeight / 2) {
+      hoverData = d;
+    }
+    
+    let isRowHovered = (d === hoverData);
+
+    // 測站名稱 (左側對齊)
+    textAlign(LEFT, CENTER);
+    if (isRowHovered) {
+      fill(255, 255, 0); // 亮黃色
+    } else {
+      fill(220);
+    }
+    text(`${d.town} - ${d.name}`, startX + 15, y);
+    
+    // 雨量 (右側對齊)
+    textAlign(RIGHT, CENTER);
+    if (isRowHovered) {
+      fill(255, 255, 0); // 亮黃色
+    } else if (d.rain > 0) {
+      fill(100, 220, 255);
+    } else {
+      fill(150);
+    }
+    text(`${d.rain} mm`, startX + boxWidth - 15, y);
+  }
+  
+  // 分隔線
+  let avgY = startY + titleSpace + rowHeight * yilanData.length;
+  stroke(100);
+  strokeWeight(1);
+  line(startX + 10, avgY, startX + boxWidth - 10, avgY);
+  
+  // 平均雨量
+  noStroke();
+  fill(255, 210, 80); // 黃橘色
+  textSize(14);
+  textAlign(LEFT, CENTER);
+  text("平均雨量", startX + 15, avgY + avgSpace / 2);
+  textAlign(RIGHT, CENTER);
+  text(`${avgRain} mm`, startX + boxWidth - 15, avgY + avgSpace / 2);
+  
+  // 恢復預設對齊
+  textAlign(CENTER, CENTER);
+
+  return hoverData;
 }
